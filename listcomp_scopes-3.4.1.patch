@@ -1,0 +1,74 @@
+diff -u -r a/Python-3.4.1/Include/code.h b/Python-3.4.1/Include/code.h
+--- a/Python-3.4.1/Include/code.h	2014-05-19 14:19:37.000000000 +0900
++++ b/Python-3.4.1/Include/code.h	2014-09-26 20:38:16.060983608 +0900
+@@ -57,6 +57,7 @@
+ #define CO_FUTURE_UNICODE_LITERALS 0x20000
+ 
+ #define CO_FUTURE_BARRY_AS_BDFL  0x40000
++#define CO_FUTURE_LISTCOMP_SCOPES 0x80000
+ 
+ /* This value is found in the co_cell2arg array when the associated cell
+    variable does not correspond to an argument. The maximum number of
+diff -u -r a/Python-3.4.1/Include/compile.h b/Python-3.4.1/Include/compile.h
+--- a/Python-3.4.1/Include/compile.h	2014-05-19 14:19:37.000000000 +0900
++++ b/Python-3.4.1/Include/compile.h	2014-09-26 20:38:16.060983608 +0900
+@@ -27,6 +27,7 @@
+ #define FUTURE_PRINT_FUNCTION "print_function"
+ #define FUTURE_UNICODE_LITERALS "unicode_literals"
+ #define FUTURE_BARRY_AS_BDFL "barry_as_FLUFL"
++#define FUTURE_LISTCOMP_SCOPES "listcomp_scopes"
+ 
+ struct _mod; /* Declare the existence of this type */
+ #define PyAST_Compile(mod, s, f, ar) PyAST_CompileEx(mod, s, f, -1, ar)
+diff -u -r a/Python-3.4.1/Include/pythonrun.h b/Python-3.4.1/Include/pythonrun.h
+--- a/Python-3.4.1/Include/pythonrun.h	2014-05-19 14:19:37.000000000 +0900
++++ b/Python-3.4.1/Include/pythonrun.h	2014-09-26 20:38:16.061984200 +0900
+@@ -9,7 +9,8 @@
+ 
+ #define PyCF_MASK (CO_FUTURE_DIVISION | CO_FUTURE_ABSOLUTE_IMPORT | \
+                    CO_FUTURE_WITH_STATEMENT | CO_FUTURE_PRINT_FUNCTION | \
+-                   CO_FUTURE_UNICODE_LITERALS | CO_FUTURE_BARRY_AS_BDFL)
++                   CO_FUTURE_UNICODE_LITERALS | CO_FUTURE_BARRY_AS_BDFL | \
++                   CO_FUTURE_LISTCOMP_SCOPES)
+ #define PyCF_MASK_OBSOLETE (CO_NESTED)
+ #define PyCF_SOURCE_IS_UTF8  0x0100
+ #define PyCF_DONT_IMPLY_DEDENT 0x0200
+diff -u -r a/Python-3.4.1/Lib/__future__.py b/Python-3.4.1/Lib/__future__.py
+--- a/Python-3.4.1/Lib/__future__.py	2014-05-19 14:19:37.000000000 +0900
++++ b/Python-3.4.1/Lib/__future__.py	2014-09-26 20:38:16.061984200 +0900
+@@ -56,6 +56,7 @@
+     "print_function",
+     "unicode_literals",
+     "barry_as_FLUFL",
++    "listcomp_scopes",
+ ]
+ 
+ __all__ = ["all_feature_names"] + all_feature_names
+@@ -72,6 +73,7 @@
+ CO_FUTURE_PRINT_FUNCTION  = 0x10000   # print function
+ CO_FUTURE_UNICODE_LITERALS = 0x20000 # unicode string literals
+ CO_FUTURE_BARRY_AS_BDFL = 0x40000
++CO_FUTURE_LISTCOMP_SCOPES = 0x80000 # list complehensions have closed scopes
+ 
+ class _Feature:
+     def __init__(self, optionalRelease, mandatoryRelease, compiler_flag):
+@@ -132,3 +134,7 @@
+ barry_as_FLUFL = _Feature((3, 1, 0, "alpha", 2),
+                          (3, 9, 0, "alpha", 0),
+                          CO_FUTURE_BARRY_AS_BDFL)
++
++listcomp_scopes = _Feature((2, 7, 8, "alpha", 1), # FIXME: temporary version!
++                           (3, 0, 0, "alpha", 0),
++                           CO_FUTURE_LISTCOMP_SCOPES)
+diff -u -r a/Python-3.4.1/Python/future.c b/Python-3.4.1/Python/future.c
+--- a/Python-3.4.1/Python/future.c	2014-05-19 14:19:40.000000000 +0900
++++ b/Python-3.4.1/Python/future.c	2014-09-26 20:38:16.061984200 +0900
+@@ -40,6 +40,8 @@
+             continue;
+         } else if (strcmp(feature, FUTURE_BARRY_AS_BDFL) == 0) {
+             ff->ff_features |= CO_FUTURE_BARRY_AS_BDFL;
++        } else if (strcmp(feature, FUTURE_LISTCOMP_SCOPES) == 0) {
++            continue;
+         } else if (strcmp(feature, "braces") == 0) {
+             PyErr_SetString(PyExc_SyntaxError,
+                             "not a chance");
