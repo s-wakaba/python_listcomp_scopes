@@ -1,0 +1,201 @@
+diff -u -r a/Python-2.7.8/Include/code.h b/Python-2.7.8/Include/code.h
+--- a/Python-2.7.8/Include/code.h	2014-06-30 11:05:23.000000000 +0900
++++ b/Python-2.7.8/Include/code.h	2014-09-26 19:30:01.416976452 +0900
+@@ -52,6 +52,7 @@
+ #define CO_FUTURE_WITH_STATEMENT  0x8000
+ #define CO_FUTURE_PRINT_FUNCTION  0x10000
+ #define CO_FUTURE_UNICODE_LITERALS 0x20000
++#define CO_FUTURE_LISTCOMP_SCOPES 0x40000
+ 
+ /* This should be defined if a future statement modifies the syntax.
+    For example, when a keyword is added.
+diff -u -r a/Python-2.7.8/Include/compile.h b/Python-2.7.8/Include/compile.h
+--- a/Python-2.7.8/Include/compile.h	2014-06-30 11:05:23.000000000 +0900
++++ b/Python-2.7.8/Include/compile.h	2014-09-26 19:30:01.416976452 +0900
+@@ -26,6 +26,7 @@
+ #define FUTURE_WITH_STATEMENT "with_statement"
+ #define FUTURE_PRINT_FUNCTION "print_function"
+ #define FUTURE_UNICODE_LITERALS "unicode_literals"
++#define FUTURE_LISTCOMP_SCOPES "listcomp_scopes"
+ 
+ 
+ struct _mod; /* Declare the existence of this type */
+diff -u -r a/Python-2.7.8/Include/pythonrun.h b/Python-2.7.8/Include/pythonrun.h
+--- a/Python-2.7.8/Include/pythonrun.h	2014-06-30 11:05:24.000000000 +0900
++++ b/Python-2.7.8/Include/pythonrun.h	2014-09-26 19:30:01.416976452 +0900
+@@ -9,7 +9,7 @@
+ 
+ #define PyCF_MASK (CO_FUTURE_DIVISION | CO_FUTURE_ABSOLUTE_IMPORT | \
+                    CO_FUTURE_WITH_STATEMENT | CO_FUTURE_PRINT_FUNCTION | \
+-                   CO_FUTURE_UNICODE_LITERALS)
++                   CO_FUTURE_UNICODE_LITERALS | CO_FUTURE_LISTCOMP_SCOPES)
+ #define PyCF_MASK_OBSOLETE (CO_NESTED)
+ #define PyCF_SOURCE_IS_UTF8  0x0100
+ #define PyCF_DONT_IMPLY_DEDENT 0x0200
+diff -u -r a/Python-2.7.8/Lib/__future__.py b/Python-2.7.8/Lib/__future__.py
+--- a/Python-2.7.8/Lib/__future__.py	2014-06-30 11:05:24.000000000 +0900
++++ b/Python-2.7.8/Lib/__future__.py	2014-09-26 19:30:01.418077559 +0900
+@@ -55,6 +55,7 @@
+     "with_statement",
+     "print_function",
+     "unicode_literals",
++    "listcomp_scopes",
+ ]
+ 
+ __all__ = ["all_feature_names"] + all_feature_names
+@@ -70,6 +71,7 @@
+ CO_FUTURE_WITH_STATEMENT  = 0x8000   # with statement
+ CO_FUTURE_PRINT_FUNCTION  = 0x10000   # print function
+ CO_FUTURE_UNICODE_LITERALS = 0x20000 # unicode string literals
++CO_FUTURE_LISTCOMP_SCOPES = 0x40000 # list complehensions have closed scopes
+ 
+ class _Feature:
+     def __init__(self, optionalRelease, mandatoryRelease, compiler_flag):
+@@ -126,3 +128,7 @@
+ unicode_literals = _Feature((2, 6, 0, "alpha", 2),
+                             (3, 0, 0, "alpha", 0),
+                             CO_FUTURE_UNICODE_LITERALS)
++
++listcomp_scopes = _Feature((2, 7, 8, "alpha", 1), # FIXME: temporary version!
++                           (3, 0, 0, "alpha", 0),
++                           CO_FUTURE_LISTCOMP_SCOPES)
+diff -u -r a/Python-2.7.8/Python/compile.c b/Python-2.7.8/Python/compile.c
+--- a/Python-2.7.8/Python/compile.c	2014-06-30 11:05:46.000000000 +0900
++++ b/Python-2.7.8/Python/compile.c	2014-09-26 19:30:01.419077472 +0900
+@@ -42,6 +42,7 @@
+ #define COMP_GENEXP   0
+ #define COMP_SETCOMP  1
+ #define COMP_DICTCOMP 2
++#define COMP_LISTCOMP 3
+ 
+ struct instr {
+     unsigned i_jabs : 1;
+@@ -178,6 +179,9 @@
+ 
+ static int compiler_with(struct compiler *, stmt_ty);
+ 
++static int compiler_comprehension(struct compiler *, expr_ty, int,
++                                  identifier, asdl_seq *, expr_ty, expr_ty);
++
+ static PyCodeObject *assemble(struct compiler *, int addNone);
+ static PyObject *__doc__;
+ 
+@@ -2669,15 +2673,30 @@
+ static int
+ compiler_listcomp(struct compiler *c, expr_ty e)
+ {
++    static identifier name;
+     assert(e->kind == ListComp_kind);
+-    ADDOP_I(c, BUILD_LIST, 0);
+-    return compiler_listcomp_generator(c, e->v.ListComp.generators, 0,
+-                                       e->v.ListComp.elt);
++    if (c->c_future->ff_features & CO_FUTURE_LISTCOMP_SCOPES) {
++        if (!name) {
++            name = PyString_FromString("<listcomp>");
++            if (!name)
++                return 0;
++        }
++        return compiler_comprehension(c, e, COMP_LISTCOMP, name,
++                                      e->v.ListComp.generators,
++                                      e->v.ListComp.elt, NULL);
++    }
++    else {
++        ADDOP_I(c, BUILD_LIST, 0);
++        return compiler_listcomp_generator(c, e->v.ListComp.generators,
++                                           0, e->v.ListComp.elt);
++    }
+ }
+ 
+ /* Dict and set comprehensions and generator expressions work by creating a
+    nested function to perform the actual iteration. This means that the
+    iteration variables don't leak into the current scope.
++   If CO_FUTURE_LISTCOMP_SCOPES flag has been set, list comprehensions also
++   perform as them.
+    The defined function is called immediately following its definition, with the
+    result of that call being the result of the expression.
+    The LC/SC version returns the populated container, while the GE version is
+@@ -2763,6 +2782,10 @@
+             VISIT(c, expr, elt);
+             ADDOP_I(c, MAP_ADD, gen_index + 1);
+             break;
++        case COMP_LISTCOMP:
++            VISIT(c, expr, elt);
++            ADDOP_I(c, LIST_APPEND, gen_index + 1);
++            break;
+         default:
+             return 0;
+         }
+@@ -2798,6 +2821,9 @@
+         case COMP_DICTCOMP:
+             op = BUILD_MAP;
+             break;
++        case COMP_LISTCOMP:
++            op = BUILD_LIST;
++            break;
+         default:
+             PyErr_Format(PyExc_SystemError,
+                          "unknown comprehension type %d", type);
+diff -u -r a/Python-2.7.8/Python/future.c b/Python-2.7.8/Python/future.c
+--- a/Python-2.7.8/Python/future.c	2014-06-30 11:05:47.000000000 +0900
++++ b/Python-2.7.8/Python/future.c	2014-09-26 19:30:01.419994632 +0900
+@@ -39,6 +39,8 @@
+             ff->ff_features |= CO_FUTURE_PRINT_FUNCTION;
+         } else if (strcmp(feature, FUTURE_UNICODE_LITERALS) == 0) {
+             ff->ff_features |= CO_FUTURE_UNICODE_LITERALS;
++        } else if (strcmp(feature, FUTURE_LISTCOMP_SCOPES) == 0) {
++            ff->ff_features |= CO_FUTURE_LISTCOMP_SCOPES;
+         } else if (strcmp(feature, "braces") == 0) {
+             PyErr_SetString(PyExc_SyntaxError,
+                             "not a chance");
+diff -u -r a/Python-2.7.8/Python/symtable.c b/Python-2.7.8/Python/symtable.c
+--- a/Python-2.7.8/Python/symtable.c	2014-06-30 11:05:47.000000000 +0900
++++ b/Python-2.7.8/Python/symtable.c	2014-09-26 19:30:01.419994632 +0900
+@@ -170,6 +170,7 @@
+ static int symtable_visit_expr(struct symtable *st, expr_ty s);
+ static int symtable_visit_genexp(struct symtable *st, expr_ty s);
+ static int symtable_visit_setcomp(struct symtable *st, expr_ty e);
++static int symtable_visit_listcomp(struct symtable *st, expr_ty e);
+ static int symtable_visit_dictcomp(struct symtable *st, expr_ty e);
+ static int symtable_visit_arguments(struct symtable *st, arguments_ty);
+ static int symtable_visit_excepthandler(struct symtable *st, excepthandler_ty);
+@@ -183,7 +184,7 @@
+ 
+ 
+ static identifier top = NULL, lambda = NULL, genexpr = NULL, setcomp = NULL,
+-    dictcomp = NULL;
++    dictcomp = NULL, listcomp = NULL;
+ 
+ #define GET_IDENTIFIER(VAR) \
+     ((VAR) ? (VAR) : ((VAR) = PyString_InternFromString(# VAR)))
+@@ -1221,8 +1222,14 @@
+         VISIT_SEQ(st, expr, e->v.Set.elts);
+         break;
+     case ListComp_kind:
+-        VISIT(st, expr, e->v.ListComp.elt);
+-        VISIT_SEQ(st, comprehension, e->v.ListComp.generators);
++        if (st->st_future->ff_features & CO_FUTURE_LISTCOMP_SCOPES) {
++            if (!symtable_visit_listcomp(st, e))
++                return 0;
++        }
++        else {
++            VISIT(st, expr, e->v.ListComp.elt);
++            VISIT_SEQ(st, comprehension, e->v.ListComp.generators);
++        }
+         break;
+     case GeneratorExp_kind:
+         if (!symtable_visit_genexp(st, e))
+@@ -1547,6 +1554,14 @@
+ }
+ 
+ static int
++symtable_visit_listcomp(struct symtable *st, expr_ty e)
++{
++    return symtable_handle_comprehension(st, e, GET_IDENTIFIER(listcomp),
++                                         e->v.ListComp.generators,
++                                         e->v.ListComp.elt, NULL);
++}
++
++static int
+ symtable_visit_dictcomp(struct symtable *st, expr_ty e)
+ {
+     return symtable_handle_comprehension(st, e, GET_IDENTIFIER(dictcomp),
